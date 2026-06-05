@@ -115,22 +115,164 @@ static void drawRecordHint(ui_box_t *b, char *out) {
           " [滚轮]滚动  [j/k]上下  [q]退出  [F1]浏览  [F2]查询  [F3]统计  [F4]新增");
 }
 
-static void drawQuery(ui_box_t *b, char *out) {
-  sprintf(out,
-          "查询商品\n\n"
-          " 关键字: %s█\n\n"
-          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          "━━━━━━━━━━━━━━\n\n"
-          "%s",
-          g_ui->input,
-          state.queryResult[0] ? state.queryResult : "  输入编号或名称，按 Enter 查询");
+static void drawQueryHeader(ui_box_t *b, char *out) {
+  /* 第一行：查询输入，第二行：表头，第三行：分隔线 */
+  char id[32], pid[32], cat[32], name[32], qty[32], date[32];
+  fmtVisual(id,   "ID",   14);
+  fmtVisual(pid,  "编号", 8);
+  fmtVisual(cat,  "类别", 8);
+  fmtVisual(name, "名称", 10);
+  fmtVisual(qty,  "数量", 6);
+  fmtVisual(date, "日期", 12);
+
+  int len = sprintf(out, "查询: %s█\n%s %s %s %s %s %s %s\n",
+                    g_ui->input, id, pid, cat, name, qty, date, "类型");
+
+  /* 分隔线匹配表头行长度 */
+  int hdrStart = len; /* 第二行起始在 out 中的偏移 */
+  while (out[hdrStart] != '\n' && out[hdrStart] != '\0') hdrStart++;
+  if (out[hdrStart] == '\n') hdrStart++;
+  int hdrLen = strlen(out + hdrStart);
+  if (hdrLen > 0 && out[hdrStart + hdrLen - 1] == '\n') hdrLen--;
+
+  memset(out + len, '-', hdrLen);
+  out[len + hdrLen] = '\n';
+  out[len + hdrLen + 1] = '\0';
+}
+
+static void drawQueryBody(ui_box_t *b, char *out) {
+  if (state.queryResult[0]) {
+    strcpy(out, state.queryResult);
+  } else {
+    sprintf(out, "\n  输入编号或名称，按 Enter 查询");
+  }
 }
 
 static void drawQueryHint(ui_box_t *b, char *out) {
   sprintf(out,
           "---------------------------------------------------------------------------"
           "-\n"
-          " [Enter]查询  [Esc]清空  [F1-F4]切换  [q]退出");
+          " [Enter]查询  [Esc]清空  [F1-F4]切换  [j/k]滚动  [q]退出");
+}
+
+/* 查询结果行数 */
+static int countQueryLines(void) {
+  if (!state.queryResult[0]) return 0;
+  int n = 0;
+  for (const char *p = state.queryResult; *p; p++)
+    if (*p == '\n') n++;
+  return n;
+}
+
+static void drawQueryScrollBar(ui_box_t *b, char *out) {
+  int total = countQueryLines();
+  int height = b->h;
+  int visible = height;
+  int termRemaining = g_ui->ws.ws_row - b->y;
+  if (visible > termRemaining) visible = termRemaining;
+  if (visible < 1) visible = 1;
+
+  if (total <= visible) {
+    char *p = out;
+    for (int i = 0; i < height; i++)
+      p += sprintf(p, "│\n");
+    return;
+  }
+  int maxScroll = total - visible;
+  if (maxScroll < 1) maxScroll = 1;
+  int pos = (-g_ui->scroll) * (visible - 1) / maxScroll;
+  if (pos < 0) pos = 0;
+  if (pos >= visible) pos = visible - 1;
+  char *p = out;
+  for (int i = 0; i < height; i++) {
+    if (i < visible)
+      p += sprintf(p, "%s\n", i == pos ? "█" : "│");
+    else
+      p += sprintf(p, " \n");
+  }
+}
+
+/* ---- 统计页 ---- */
+static void drawStatHeader(ui_box_t *b, char *out) {
+  char cat[32], pid[32], name[32], in[32], out_[32], remain[32];
+  fmtVisual(cat,    "类别", 8);
+  fmtVisual(pid,    "编号", 8);
+  fmtVisual(name,   "商品", 8);
+  fmtVisual(in,     "进货", 8);
+  fmtVisual(out_,   "卖出", 8);
+  fmtVisual(remain, "库存", 8);
+
+  int len = sprintf(out, "统计汇总                                    \n%s %s %s %s %s %s\n",
+                    cat, pid, name, in, out_, remain);
+  memset(out + len, '-', 48);
+  out[len + 48] = '\n';
+  out[len + 49] = '\0';
+}
+
+static void drawStatBody(ui_box_t *b, char *out) {
+  buildStatisticsTable(state.tableBuf, sizeof(state.tableBuf));
+  /* 跳过 buildStatisticsTable 自带的表头两行 */
+  char *p = state.tableBuf;
+  int lines = 0;
+  while (*p && lines < 2) {
+    if (*p == '\n') lines++;
+    p++;
+  }
+  strcpy(out, p);
+}
+
+static void drawStatHint(ui_box_t *b, char *out) {
+  sprintf(out,
+          "---------------------------------------------------------------------------"
+          "-\n"
+          " [j/k]滚动  [F1-F4]切换  [q]退出");
+}
+
+/* 统计行数（去重商品数）*/
+static int countStatLines(void) {
+  Node *p = head;
+  int n = 0;
+  char seen[256][32];
+  int seenCount = 0;
+  while (p) {
+    int found = 0;
+    for (int i = 0; i < seenCount; i++)
+      if (strcmp(seen[i], p->productId) == 0) { found = 1; break; }
+    if (!found) {
+      if (seenCount < 256) strcpy(seen[seenCount++], p->productId);
+      n++;
+    }
+    p = p->next;
+  }
+  return n;
+}
+
+static void drawStatScrollBar(ui_box_t *b, char *out) {
+  int total = countStatLines();
+  int height = b->h;
+  int visible = height;
+  int termRemaining = g_ui->ws.ws_row - b->y;
+  if (visible > termRemaining) visible = termRemaining;
+  if (visible < 1) visible = 1;
+
+  if (total <= visible) {
+    char *p = out;
+    for (int i = 0; i < height; i++)
+      p += sprintf(p, "│\n");
+    return;
+  }
+  int maxScroll = total - visible;
+  if (maxScroll < 1) maxScroll = 1;
+  int pos = (-g_ui->scroll) * (visible - 1) / maxScroll;
+  if (pos < 0) pos = 0;
+  if (pos >= visible) pos = visible - 1;
+  char *p = out;
+  for (int i = 0; i < height; i++) {
+    if (i < visible)
+      p += sprintf(p, "%s\n", i == pos ? "█" : "│");
+    else
+      p += sprintf(p, " \n");
+  }
 }
 
 static void drawAdd(ui_box_t *b, char *out) {
@@ -190,6 +332,7 @@ static void clearQuery() {
     goMain();
     return;
   }
+  g_ui->keyConsumed = 1;
   g_ui->input[0] = '\0';
   g_ui->inputLen = 0;
   state.queryInput[0] = '\0';
@@ -200,15 +343,17 @@ static void clearQuery() {
 /* 查询页 Enter 回调 */
 static void onQueryEnter() {
   if (g_ui->screen != SCREEN_QUERY) return;
+  g_ui->keyConsumed = 1;
   strcpy(state.queryInput, g_ui->input);
+  g_ui->scroll = 0;
   doQuery();
-  g_ui->inputMode = 0;
   ui_draw(g_ui);
 }
 
 /* ---- 新增记录处理 ---- */
 static void addNextField() {
   if (g_ui->screen != SCREEN_ADD) return;
+  g_ui->keyConsumed = 1;
 
   /* 保存当前输入到对应字段 */
   switch (state.addField) {
@@ -269,6 +414,7 @@ static void addNextField() {
 
 static void addToggleFlag() {
   if (g_ui->screen != SCREEN_ADD) return;
+  g_ui->keyConsumed = 1;
   state.addFlag = !state.addFlag;
   state.addMsg[0] = '\0';
   ui_draw(g_ui);
@@ -291,39 +437,6 @@ static void initAddForm() {
 
   strcpy(g_ui->input, state.addProductId);
   g_ui->inputLen = 0;
-}
-
-static void drawStat(ui_box_t *b, char *out) {
-  buildStatisticsTable(state.tableBuf, sizeof(state.tableBuf));
-
-  strcpy(out, state.tableBuf);
-}
-
-static void drawScrollInfo(ui_box_t *b, char *out) {
-  int total = getRecordCount();
-
-  int visible = g_ui->ws.ws_row - 4;
-
-  int current = -g_ui->scroll;
-
-  if (current < 0)
-    current = 0;
-
-  int maxScroll = total - visible;
-
-  if (maxScroll < 1)
-    maxScroll = 1;
-
-  int percent =
-      current * 100 /
-      maxScroll;
-
-  sprintf(
-      out,
-      "[%d/%d] %d%%",
-      current,
-      total,
-      percent);
 }
 
 static void drawScrollBar(ui_box_t *b, char *out) {
@@ -368,77 +481,73 @@ static void drawScrollBar(ui_box_t *b, char *out) {
 }
 
 static void quitApp() {
+  g_ui->keyConsumed = 1;
   saveCSV("data.csv");
-
   ui_free(g_ui);
-
   exit(0);
 }
 
 static void scrollDown() {
-  if (g_ui->screen != SCREEN_RECORD)
+  if (g_ui->inputMode) return;
+  if (g_ui->screen != SCREEN_RECORD && g_ui->screen != SCREEN_QUERY &&
+      g_ui->screen != SCREEN_STAT)
     return;
-
+  g_ui->keyConsumed = 1;
   g_ui->scroll -= 2;
-
   if (g_ui->scroll < -10000)
     g_ui->scroll = -10000;
-
   ui_draw(g_ui);
 }
 
 static void scrollUp() {
-  if (g_ui->screen != SCREEN_RECORD)
+  if (g_ui->inputMode) return;
+  if (g_ui->screen != SCREEN_RECORD && g_ui->screen != SCREEN_QUERY &&
+      g_ui->screen != SCREEN_STAT)
     return;
-
+  g_ui->keyConsumed = 1;
   g_ui->scroll += 2;
-
   if (g_ui->scroll > 0)
     g_ui->scroll = 0;
-
   ui_draw(g_ui);
 }
 
 static void goMain() {
+  g_ui->keyConsumed = 1;
   ui_screen(SCREEN_MAIN, g_ui);
   g_ui->inputMode = 0;
   ui_redraw(g_ui);
 }
 
 static void goRecord() {
+  g_ui->keyConsumed = 1;
   ui_screen(SCREEN_RECORD, g_ui);
-
   g_ui->inputMode = 0;
-
   ui_redraw(g_ui);
 }
 
 static void goQuery() {
+  g_ui->keyConsumed = 1;
   ui_screen(SCREEN_QUERY, g_ui);
-
   g_ui->inputMode = SCREEN_QUERY;
   g_ui->input[0] = '\0';
   g_ui->inputLen = 0;
   state.queryInput[0] = '\0';
   state.queryResult[0] = '\0';
-
   ui_redraw(g_ui);
 }
 
 static void goStat() {
+  g_ui->keyConsumed = 1;
   ui_screen(SCREEN_STAT, g_ui);
-
   g_ui->inputMode = 0;
-
   ui_redraw(g_ui);
 }
 
 static void goAdd() {
+  g_ui->keyConsumed = 1;
   ui_screen(SCREEN_ADD, g_ui);
-
   g_ui->inputMode = SCREEN_ADD;
   initAddForm();
-
   ui_redraw(g_ui);
 }
 
@@ -447,42 +556,52 @@ void uiInit(ui_t *u) {
 
   memset(&state, 0, sizeof(state));
 
+  int termRows = u->ws.ws_row;
+  int recDataH = termRows - 5;  /* 表头2行, 提示2行, 间隔 */
+  int qryDataH = termRows - 6;  /* 查询头3行, 提示2行, 间隔 */
+  int statDataH = termRows - 6;
+  if (recDataH < 5)  recDataH = 5;
+  if (qryDataH < 5)  qryDataH = 5;
+  if (statDataH < 5) statDataH = 5;
+
   ui_add(2, 2, 80, 20, SCREEN_MAIN, NULL, 0, drawMain, NULL, NULL, NULL, NULL, 0,
          u);
 
-  /* 记录浏览页面：数据区先添加（先绘制，表头后绘制会覆盖顶部两行）*/
-  ui_add(1, 3, 76, 35, SCREEN_RECORD, NULL, 0, drawRecord, NULL, NULL, NULL,
-         NULL, 1, u);
-
-  /* 固定表头（后绘制，覆盖数据区顶部）*/
+  /* ========== 记录浏览页 ========== */
+  ui_add(1, 3, 76, recDataH, SCREEN_RECORD, NULL, 0, drawRecord, NULL, NULL,
+         NULL, NULL, 1, u);
   ui_add(1, 1, 76, 2, SCREEN_RECORD, NULL, 0, drawRecordHeader, NULL, NULL,
          NULL, NULL, 0, u);
-
-  /* 滚动条 */
-  ui_add(78, 3, 2, 35, SCREEN_RECORD, NULL, 0, drawScrollBar, NULL, NULL, NULL,
-         NULL, 0, u);
-
-  /* 固定操作提示（底部两行：分隔线 + 快捷键，不随滚动）*/
-  ui_add(1, u->ws.ws_row - 2, 76, 2, SCREEN_RECORD, NULL, 0, drawRecordHint,
-         NULL, NULL, NULL, NULL, 0, u);
-
-  /* ---- 查询页面 ---- */
-  ui_add(1, 1, 76, u->ws.ws_row - 3, SCREEN_QUERY, NULL, 0, drawQuery, NULL,
+  ui_add(78, 3, 2, recDataH, SCREEN_RECORD, NULL, 0, drawScrollBar, NULL, NULL,
+         NULL, NULL, 0, u);
+  ui_add(1, termRows - 2, 76, 2, SCREEN_RECORD, NULL, 0, drawRecordHint, NULL,
          NULL, NULL, NULL, 0, u);
 
-  ui_add(1, u->ws.ws_row - 2, 76, 2, SCREEN_QUERY, NULL, 0, drawQueryHint,
-         NULL, NULL, NULL, NULL, 0, u);
+  /* ========== 查询页 ========== */
+  ui_add(1, 4, 76, qryDataH, SCREEN_QUERY, NULL, 0, drawQueryBody, NULL, NULL,
+         NULL, NULL, 1, u);
+  ui_add(1, 1, 76, 3, SCREEN_QUERY, NULL, 0, drawQueryHeader, NULL, NULL, NULL,
+         NULL, 0, u);
+  ui_add(78, 4, 2, qryDataH, SCREEN_QUERY, NULL, 0, drawQueryScrollBar, NULL,
+         NULL, NULL, NULL, 0, u);
+  ui_add(1, termRows - 2, 76, 2, SCREEN_QUERY, NULL, 0, drawQueryHint, NULL,
+         NULL, NULL, NULL, 0, u);
 
-  /* ---- 新增记录页面 ---- */
-  ui_add(1, 1, 76, u->ws.ws_row - 3, SCREEN_ADD, NULL, 0, drawAdd, NULL, NULL,
+  /* ========== 新增记录页 ========== */
+  ui_add(1, 1, 76, termRows - 3, SCREEN_ADD, NULL, 0, drawAdd, NULL, NULL,
+         NULL, NULL, 0, u);
+  ui_add(1, termRows - 2, 76, 2, SCREEN_ADD, NULL, 0, drawAddHint, NULL, NULL,
          NULL, NULL, 0, u);
 
-  ui_add(1, u->ws.ws_row - 2, 76, 2, SCREEN_ADD, NULL, 0, drawAddHint, NULL,
+  /* ========== 统计页 ========== */
+  ui_add(1, 4, 76, statDataH, SCREEN_STAT, NULL, 0, drawStatBody, NULL, NULL,
+         NULL, NULL, 1, u);
+  ui_add(1, 1, 76, 3, SCREEN_STAT, NULL, 0, drawStatHeader, NULL, NULL, NULL,
+         NULL, 0, u);
+  ui_add(78, 4, 2, statDataH, SCREEN_STAT, NULL, 0, drawStatScrollBar, NULL,
          NULL, NULL, NULL, 0, u);
-
-  /* ---- 统计页面 ---- */
-  ui_add(1, 1, 80, 40, SCREEN_STAT, NULL, 0, drawStat, NULL, NULL, NULL, NULL, 0,
-         u);
+  ui_add(1, termRows - 2, 76, 2, SCREEN_STAT, NULL, 0, drawStatHint, NULL,
+         NULL, NULL, NULL, 0, u);
 
   /* F1-F4 切换页面（兼容两种终端转义序列）*/
   ui_key("\x1bOP", goRecord, u);
@@ -497,9 +616,11 @@ void uiInit(ui_t *u) {
   ui_key("j", scrollDown, u);
   ui_key("k", scrollUp, u);
 
-  /* 查询/新增通用：Enter 提交，Esc 返回 */
+  /* 查询/新增通用：Enter 提交，Esc 返回（\r 和 \n 双保险）*/
   ui_key("\r", onQueryEnter, u);
+  ui_key("\n", onQueryEnter, u);
   ui_key("\r", addNextField, u);
+  ui_key("\n", addNextField, u);
   ui_key("\t", addNextField, u);
   ui_key("\x1b", clearQuery, u);
 

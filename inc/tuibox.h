@@ -351,7 +351,8 @@ typedef struct ui_t {
   int mouse, screen, scroll, canscroll, id, force;
   char input[256];
   int inputLen;
-  int inputMode; /* 当前处于文本输入模式的 screen，0=无 */
+  int inputMode;   /* 当前处于文本输入模式的 screen，0=无 */
+  int keyConsumed;  /* handler 设置：1=真正处理了按键，0=未处理 */
 } ui_t;
 
 /* =========================== */
@@ -371,6 +372,7 @@ static void ui_new(int s, ui_t *u) {
   tcgetattr(STDIN_FILENO, &(u->tio));
   raw = u->tio;
   raw.c_lflag &= ~(ECHO | ICANON);
+  raw.c_iflag &= ~(ICRNL | IXON);
   tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 
   vec_init(&(u->b));
@@ -392,6 +394,7 @@ static void ui_new(int s, ui_t *u) {
 
   u->inputLen = 0;
   u->inputMode = 0;
+  u->keyConsumed = 0;
   memset(u->input, 0, sizeof(u->input));
 }
 
@@ -507,11 +510,21 @@ static void ui_draw_one(ui_box_t *tmp, int flush, ui_t *u) {
   if (tmp->screen != u->screen)
     return;
 
-  buf = calloc(1, strlen(tmp->cache) * 2);
+  /* 确保缓冲区至少 8KB，防止内容动态增长时溢出 */
+  int bufsz = strlen(tmp->cache) * 2;
+  if (bufsz < 8192) bufsz = 8192;
+  buf = calloc(1, bufsz);
+
   if (u->force || tmp->watch == NULL || *(tmp->watch) != tmp->last) {
     tmp->draw(tmp, buf);
     if (tmp->watch != NULL)
       tmp->last = *(tmp->watch);
+
+    /* 如果新内容比缓存大，重新分配缓存 */
+    int newlen = strlen(buf);
+    if (newlen + 1 > bufsz / 2) {
+      tmp->cache = realloc(tmp->cache, newlen * 2 + 1);
+    }
     strcpy(tmp->cache, buf);
   } else {
     /* buf is allocated proportionally to tmp->cache, so strcpy is safe */
@@ -611,24 +624,32 @@ static void _ui_update(char *c, int n, ui_t *u) {
   vec_foreach(&(u->e), evt, ind) {
     int elen = strlen(evt->c);
     if (elen == n && strncmp(c, evt->c, elen) == 0) {
+      u->keyConsumed = 0;
       evt->f();
-      matched = 1;
+      if (u->keyConsumed)
+        matched = 1;
     }
   }
 
-  /* 文本输入：无已注册按键匹配 且 当前屏幕处于输入模式 且 单字节输入 */
-  if (!matched && u->inputMode == u->screen && n == 1) {
-    unsigned char ch = c[0];
-    if (ch >= 0x20 && ch <= 0x7E) {
-      if (u->inputLen < 255) {
-        u->input[u->inputLen++] = ch;
-        u->input[u->inputLen] = '\0';
-        ui_draw(u);
-      }
-    } else if (ch == 0x7F) {
+  /* 文本输入：无已注册按键消费 且 当前屏幕处于输入模式 */
+  if (!matched && u->inputMode == u->screen) {
+    /* 退格 */
+    if (n == 1 && c[0] == 0x7F) {
       if (u->inputLen > 0)
         u->input[--u->inputLen] = '\0';
       ui_draw(u);
+    } else {
+      /* 接受 ASCII 可打印字符 (0x20-0x7E) 及 UTF-8 多字节 (>=0x80) */
+      int ok = 1;
+      for (int i = 0; i < n; i++) {
+        if ((unsigned char)c[i] < 0x20) { ok = 0; break; }
+      }
+      if (ok && u->inputLen + n < 255) {
+        memcpy(u->input + u->inputLen, c, n);
+        u->inputLen += n;
+        u->input[u->inputLen] = '\0';
+        ui_draw(u);
+      }
     }
   }
 }
