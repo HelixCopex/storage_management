@@ -29,7 +29,11 @@ typedef struct
     long long querySelId;   /* 选中记录的 ID */
     int  confirmMode;       /* 0=无, 1=删除确认, 2=编辑确认 */
 
-    /* 新增记录表单 */
+    /* 编辑模式 */
+    int  editMode;          /* 0=新增, 1=编辑已有记录 */
+    long long editId;       /* 正在编辑的记录 ID */
+
+    /* 新增/编辑记录表单 */
     char addProductId[32];
     char addCategory[32];
     char addName[64];

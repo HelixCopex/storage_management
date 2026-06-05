@@ -5,6 +5,7 @@
 #include "ui.h"
 
 #include "csv.h"
+#include "modify.h"
 #include "query.h"
 #include "ui_data.h"
 
@@ -13,6 +14,7 @@ static ui_t *g_ui;
 
 /* 前向声明 */
 static void goMain(void);
+static void goQuery(void);
 
 /* 计算 UTF-8 字符串的显示宽度（ASCII=1, 中文/全角=2）*/
 static int strVisualWidth(const char *s) {
@@ -20,7 +22,7 @@ static int strVisualWidth(const char *s) {
   while (*s) {
     unsigned char c = *s;
     if (c < 0x80)      { w++;  s++; }           // ASCII
-    else if (c < 0xE0) { w++;  s += 2; }         // 2-byte (Latin 拡張, 按1列)
+    else if (c < 0xE0) { w++;  s += 2; }         // 2-byte (Latin 扩展, 按1列)
     else if (c < 0xF0) { w += 2; s += 3; }       // 3-byte (CJK, 2列)
     else               { w += 2; s += 4; }       // 4-byte (emoji, 2列)
   }
@@ -166,9 +168,8 @@ static void drawQueryBody(ui_box_t *b, char *out) {
 static void drawQueryHint(ui_box_t *b, char *out) {
   const char *confirmLine = "";
   if (state.confirmMode == 1)
-    confirmLine = " ⚠ 确认删除该记录？[y]确认 [n]取消";
-  else if (state.confirmMode == 2)
-    confirmLine = " ⚠ 确认切换该记录的进/出货标记？[y]确认 [n]取消";
+    confirmLine = "确认删除该记录？[y]确认 [n]取消";
+
 
   sprintf(out,
           "---------------------------------------------------------------------------"
@@ -176,7 +177,7 @@ static void drawQueryHint(ui_box_t *b, char *out) {
           "%s%s",
           confirmLine,
           state.confirmMode ? "" :
-          " [d]删除  [e]编辑  [Enter]查询  [Esc]清空  [F1-F4]切换  [q]退出");
+          "[单击]选择记录 [d]删除  [e]编辑  [Enter]查询  [Esc]清空");
 }
 
 /* 查询结果行数 */
@@ -306,7 +307,8 @@ static void drawAdd(ui_box_t *b, char *out) {
   char buf[1024];
   int pos = 0;
 
-  pos += sprintf(buf + pos, "新增记录\n\n");
+  pos += sprintf(buf + pos, "%s\n\n",
+                 state.editMode ? "编辑记录" : "新增记录");
 
   for (int i = 0; i < 5; i++) {
     pos += sprintf(buf + pos, " %s %s: %s%s\n",
@@ -333,7 +335,8 @@ static void drawAddHint(ui_box_t *b, char *out) {
   sprintf(out,
           "---------------------------------------------------------------------------"
           "-\n"
-          " [Enter]确认  [Tab]下一项  [左/右]切换类型  [Esc]返回");
+          " [Enter]确认  [Tab]下一项  [左/右]切换类型  [Esc]%s",
+          state.editMode ? "取消并返回" : "返回");
 }
 
 /* ---- 查询处理 ---- */
@@ -352,6 +355,13 @@ static void doQuery() {
 }
 
 static void clearQuery() {
+  /* 编辑模式下 Esc 取消编辑，返回查询页 */
+  if (g_ui->screen == SCREEN_ADD && state.editMode) {
+    g_ui->keyConsumed = 1;
+    state.editMode = 0;
+    goQuery();
+    return;
+  }
   if (g_ui->screen != SCREEN_QUERY) {
     goMain();
     return;
@@ -419,14 +429,36 @@ static void onQueryDelete() {
   ui_draw(g_ui);
 }
 
-/* e 键：编辑确认（切换进/出货标记）*/
+/* e 键：打开编辑表单 */
 static void onQueryEdit() {
   if (g_ui->screen != SCREEN_QUERY) return;
   if (state.querySelRow < 0) return;
-  if (state.confirmMode == 2) return;
+
+  Node *node = findById(state.querySelId);
+  if (!node) return;
+
   g_ui->keyConsumed = 1;
-  state.confirmMode = 2;
-  ui_draw(g_ui);
+
+  /* 预填表单 */
+  strcpy(state.addProductId, node->productId);
+  strcpy(state.addCategory,  node->category);
+  strcpy(state.addName,      node->name);
+  snprintf(state.addQuantity, sizeof(state.addQuantity), "%d", node->quantity);
+  strcpy(state.addDate,      node->date);
+  state.addFlag  = node->flag;
+  state.addField = 0;
+  state.addMsg[0] = '\0';
+  state.editMode = 1;
+  state.editId   = node->id;
+  state.confirmMode = 0;
+
+  /* 切换到新增/编辑页面 */
+  g_ui->keyConsumed = 1;
+  ui_screen(SCREEN_ADD, g_ui);
+  g_ui->inputMode = SCREEN_ADD;
+  strcpy(g_ui->input, state.addProductId);
+  g_ui->inputLen = strlen(g_ui->input);
+  ui_redraw(g_ui);
 }
 
 /* y / n 确认与取消 */
@@ -437,9 +469,6 @@ static void onQueryConfirmYes() {
 
   if (state.confirmMode == 1) {
     deleteById(state.querySelId);
-  } else if (state.confirmMode == 2) {
-    Node *node = findById(state.querySelId);
-    if (node) node->flag = !node->flag;
   }
 
   state.confirmMode = 0;
@@ -482,6 +511,22 @@ static void addNextField() {
       strcpy(g_ui->input, "");
       g_ui->inputLen = 0;
       ui_draw(g_ui);
+      return;
+    }
+
+    if (state.editMode) {
+      /* 编辑模式：更新已有记录 */
+      modifyRecordById(state.editId, state.addProductId,
+                       state.addCategory, state.addName,
+                       qty, state.addDate, state.addFlag);
+      state.editMode = 0;
+      /* 返回查询页并刷新结果 */
+      g_ui->inputMode = SCREEN_QUERY;
+      g_ui->input[0] = '\0';
+      g_ui->inputLen = 0;
+      ui_screen(SCREEN_QUERY, g_ui);
+      doQuery();
+      ui_redraw(g_ui);
       return;
     }
 
@@ -652,6 +697,8 @@ static void goStat() {
 
 static void goAdd() {
   g_ui->keyConsumed = 1;
+  state.editMode = 0;
+  state.editId = 0;
   ui_screen(SCREEN_ADD, g_ui);
   g_ui->inputMode = SCREEN_ADD;
   initAddForm();
