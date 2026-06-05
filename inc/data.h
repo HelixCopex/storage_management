@@ -37,4 +37,7 @@ Node *findById(long long id);
 Node *findByProductId(const char *productId);
 Node *findByName(const char *name);
 
+/* 删除 */
+int deleteById(long long id);
+
 #endif

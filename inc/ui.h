@@ -24,6 +24,11 @@ typedef struct
     char queryResult[8192];
     int queryLen;
 
+    /* 查询结果选中与确认 */
+    int  querySelRow;       /* 选中的行号，-1=无 */
+    long long querySelId;   /* 选中记录的 ID */
+    int  confirmMode;       /* 0=无, 1=删除确认, 2=编辑确认 */
+
     /* 新增记录表单 */
     char addProductId[32];
     char addCategory[32];

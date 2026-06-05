@@ -108,6 +108,23 @@ Node *findByName(const char *name) {
   return NULL;
 }
 
+int deleteById(long long id) {
+  Node *p = head, *prev = NULL;
+  while (p) {
+    if (p->id == id) {
+      if (prev)
+        prev->next = p->next;
+      else
+        head = p->next;
+      free(p);
+      return 1;
+    }
+    prev = p;
+    p = p->next;
+  }
+  return 0;
+}
+
 void printList() {
   Node *p = head;
 

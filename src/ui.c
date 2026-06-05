@@ -141,18 +141,42 @@ static void drawQueryHeader(ui_box_t *b, char *out) {
 }
 
 static void drawQueryBody(ui_box_t *b, char *out) {
-  if (state.queryResult[0]) {
-    strcpy(out, state.queryResult);
-  } else {
+  if (!state.queryResult[0]) {
     sprintf(out, "\n  输入编号或名称，按 Enter 查询");
+    return;
+  }
+
+  /* 逐行输出，对选中行包裹反显转义序列 \x1b[7m */
+  char tmp[8192];
+  strcpy(tmp, state.queryResult);
+  char *line = strtok(tmp, "\n");
+  int row = 0;
+  out[0] = '\0';
+
+  while (line) {
+    if (row == state.querySelRow)
+      sprintf(out + strlen(out), "\x1b[7m%s\x1b[0m\n", line);
+    else
+      sprintf(out + strlen(out), "%s\n", line);
+    row++;
+    line = strtok(NULL, "\n");
   }
 }
 
 static void drawQueryHint(ui_box_t *b, char *out) {
+  const char *confirmLine = "";
+  if (state.confirmMode == 1)
+    confirmLine = " ⚠ 确认删除该记录？[y]确认 [n]取消";
+  else if (state.confirmMode == 2)
+    confirmLine = " ⚠ 确认切换该记录的进/出货标记？[y]确认 [n]取消";
+
   sprintf(out,
           "---------------------------------------------------------------------------"
           "-\n"
-          " [Enter]查询  [Esc]清空  [F1-F4]切换  [j/k]滚动  [q]退出");
+          "%s%s",
+          confirmLine,
+          state.confirmMode ? "" :
+          " [d]删除  [e]编辑  [Enter]查询  [Esc]清空  [F1-F4]切换  [q]退出");
 }
 
 /* 查询结果行数 */
@@ -332,6 +356,13 @@ static void clearQuery() {
     goMain();
     return;
   }
+  /* 确认模式下 Esc 取消确认 */
+  if (state.confirmMode) {
+    g_ui->keyConsumed = 1;
+    state.confirmMode = 0;
+    ui_draw(g_ui);
+    return;
+  }
   g_ui->keyConsumed = 1;
   g_ui->input[0] = '\0';
   g_ui->inputLen = 0;
@@ -346,7 +377,83 @@ static void onQueryEnter() {
   g_ui->keyConsumed = 1;
   strcpy(state.queryInput, g_ui->input);
   g_ui->scroll = 0;
+  state.querySelRow = -1;
+  state.confirmMode = 0;
   doQuery();
+  ui_draw(g_ui);
+}
+
+/* 查询结果点击：选中行 */
+static void onQueryClick(ui_box_t *b, int x, int y, int mouse) {
+  (void)x; (void)mouse;
+  if (g_ui->screen != SCREEN_QUERY) return;
+  if (!state.queryResult[0]) return;
+
+  int row = y - b->y;
+  if (row < 0) return;
+
+  /* 从 queryResult 中取出第 row 行，提取 ID */
+  char tmp[8192];
+  strcpy(tmp, state.queryResult);
+  char *line = strtok(tmp, "\n");
+  for (int i = 0; i < row && line; i++)
+    line = strtok(NULL, "\n");
+  if (!line) return;
+
+  long long id = atoll(line);
+  if (id == 0) return;
+
+  state.querySelRow = row;
+  state.querySelId  = id;
+  state.confirmMode = 0;
+  ui_draw(g_ui);
+}
+
+/* d 键：删除确认 */
+static void onQueryDelete() {
+  if (g_ui->screen != SCREEN_QUERY) return;
+  if (state.querySelRow < 0) return;
+  if (state.confirmMode == 1) return; /* 已在确认中 */
+  g_ui->keyConsumed = 1;
+  state.confirmMode = 1;
+  ui_draw(g_ui);
+}
+
+/* e 键：编辑确认（切换进/出货标记）*/
+static void onQueryEdit() {
+  if (g_ui->screen != SCREEN_QUERY) return;
+  if (state.querySelRow < 0) return;
+  if (state.confirmMode == 2) return;
+  g_ui->keyConsumed = 1;
+  state.confirmMode = 2;
+  ui_draw(g_ui);
+}
+
+/* y / n 确认与取消 */
+static void onQueryConfirmYes() {
+  if (g_ui->screen != SCREEN_QUERY) return;
+  if (!state.confirmMode) return;
+  g_ui->keyConsumed = 1;
+
+  if (state.confirmMode == 1) {
+    deleteById(state.querySelId);
+  } else if (state.confirmMode == 2) {
+    Node *node = findById(state.querySelId);
+    if (node) node->flag = !node->flag;
+  }
+
+  state.confirmMode = 0;
+  state.querySelRow = -1;
+  g_ui->scroll = 0;
+  doQuery();
+  ui_draw(g_ui);
+}
+
+static void onQueryConfirmNo() {
+  if (g_ui->screen != SCREEN_QUERY) return;
+  if (!state.confirmMode) return;
+  g_ui->keyConsumed = 1;
+  state.confirmMode = 0;
   ui_draw(g_ui);
 }
 
@@ -578,8 +685,8 @@ void uiInit(ui_t *u) {
          NULL, NULL, NULL, 0, u);
 
   /* ========== 查询页 ========== */
-  ui_add(1, 4, 76, qryDataH, SCREEN_QUERY, NULL, 0, drawQueryBody, NULL, NULL,
-         NULL, NULL, 1, u);
+  ui_add(1, 4, 76, qryDataH, SCREEN_QUERY, NULL, 0, drawQueryBody,
+         (func)onQueryClick, NULL, NULL, NULL, 1, u);
   ui_add(1, 1, 76, 3, SCREEN_QUERY, NULL, 0, drawQueryHeader, NULL, NULL, NULL,
          NULL, 0, u);
   ui_add(78, 4, 2, qryDataH, SCREEN_QUERY, NULL, 0, drawQueryScrollBar, NULL,
@@ -615,6 +722,12 @@ void uiInit(ui_t *u) {
 
   ui_key("j", scrollDown, u);
   ui_key("k", scrollUp, u);
+
+  /* 查询结果操作 */
+  ui_key("d", onQueryDelete, u);
+  ui_key("e", onQueryEdit, u);
+  ui_key("y", onQueryConfirmYes, u);
+  ui_key("n", onQueryConfirmNo, u);
 
   /* 查询/新增通用：Enter 提交，Esc 返回（\r 和 \n 双保险）*/
   ui_key("\r", onQueryEnter, u);
