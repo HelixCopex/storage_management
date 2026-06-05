@@ -16,13 +16,19 @@ static ui_t *g_ui;
 static void goMain(void);
 static void goQuery(void);
 
+/* ---- 青-橙配色转义序列 ---- */
+#define C_CYAN   "\x1b[1;36m"
+#define C_ORANGE "\x1b[1;33m"
+#define C_RESET  "\x1b[0m"
+#define C_DIM    "\x1b[2m"
+
 /* 计算 UTF-8 字符串的显示宽度（ASCII=1, 中文/全角=2）*/
 static int strVisualWidth(const char *s) {
   int w = 0;
   while (*s) {
     unsigned char c = *s;
     if (c < 0x80)      { w++;  s++; }           // ASCII
-    else if (c < 0xE0) { w++;  s += 2; }         // 2-byte (Latin 扩展, 按1列)
+    else if (c < 0xE0) { w++;  s += 2; }         // 2-byte (Latin 拡張, 按1列)
     else if (c < 0xF0) { w += 2; s += 3; }       // 3-byte (CJK, 2列)
     else               { w += 2; s += 4; }       // 4-byte (emoji, 2列)
   }
@@ -52,18 +58,41 @@ static void fmtVisual(char *dst, const char *src, int visualWidth) {
   *d = '\0';
 }
 
+/* 将文本居中填入宽度为 w 的缓冲区 */
+static int fmtCenter(char *dst, const char *text, int w) {
+  int vw = strVisualWidth(text);
+  int padL = (w - vw) / 2;
+  if (padL < 0) padL = 0;
+  int pos = 0;
+  for (int i = 0; i < padL; i++) dst[pos++] = ' ';
+  pos += sprintf(dst + pos, "%s", text);
+  while (pos < w) dst[pos++] = ' ';
+  dst[pos] = '\0';
+  return pos;
+}
+
 static void drawMain(ui_box_t *b, char *out) {
-  sprintf(out, "超市管理系统\n\n"
-               "[F1] 浏览记录\n"
-               "[F2] 查询商品\n"
-               "[F3] 分类统计\n"
-               "[F4] 新增记录\n\n"
-               "[Q] 退出\n");
+  char line[128];
+  int pos = 0;
+
+  pos += fmtCenter(line, C_CYAN "TerMark 仓买管理终端" C_RESET, b->w);
+  pos += sprintf(line + pos, "\n\n");
+  sprintf(out, "%s", line);
+
+  pos = strlen(out);
+  pos += sprintf(out + pos, "     %s[F1]%s 浏览记录\n", C_ORANGE, C_RESET);
+  pos += sprintf(out + pos, "     %s[F2]%s 查询商品\n", C_ORANGE, C_RESET);
+  pos += sprintf(out + pos, "     %s[F3]%s 分类统计\n", C_ORANGE, C_RESET);
+  pos += sprintf(out + pos, "     %s[F4]%s 新增记录\n", C_ORANGE, C_RESET);
+  pos += sprintf(out + pos, "     %s[F5]%s 提示\n\n", C_ORANGE, C_RESET);
+  pos += sprintf(out + pos, "     %s[Q]%s  退出\n\n", C_ORANGE, C_RESET);
+
+  fmtCenter(line, C_DIM "v1.0.0 @ HelixCopex 黄皓昱" C_RESET, b->w);
+  pos += sprintf(out + pos, "%s", line);
 }
 
 static void drawRecordHeader(ui_box_t *b, char *out) {
   char id[32], pid[32], cat[32], name[32], qty[32], date[32];
-
   fmtVisual(id,   "ID",   14);
   fmtVisual(pid,  "编号", 8);
   fmtVisual(cat,  "类别", 8);
@@ -71,54 +100,51 @@ static void drawRecordHeader(ui_box_t *b, char *out) {
   fmtVisual(qty,  "数量", 6);
   fmtVisual(date, "日期", 12);
 
-  int len = sprintf(out, "%s %s %s %s %s %s %s\n",
+  int len = sprintf(out, C_CYAN "%s %s %s %s %s %s %s\n" C_RESET,
                     id, pid, cat, name, qty, date, "类型");
 
-  /* 分隔线与标题行等长 */
-  memset(out + len, '-', len - 1);
-  out[len + len - 1] = '\n';
-  out[len + len] = '\0';
+  /* 分隔线长度匹配表头可见宽度（跳过颜色转义序列）*/
+  int sepLen = len - 1;  /* 去掉换行符 */
+  if (sepLen > 76) sepLen = 76;
+  if (sepLen < 1) sepLen = 1;
+  memset(out + len, '-', sepLen);
+  out[len + sepLen] = '\n';
+  out[len + sepLen + 1] = '\0';
 }
 
 static void drawRecord(ui_box_t *b, char *out) {
   Node *p = head;
-
+  int outmax = 60000;  /* 安全上限，远小于 MAXCACHESIZE */
+  int outlen = 0;
   out[0] = '\0';
 
-  while (p) {
+  while (p && outlen < outmax) {
     char line[256];
     char cat[32], name[32];
-
     fmtVisual(cat, p->category, 8);
     fmtVisual(name, p->name, 10);
 
-    snprintf(
-        line,
-        sizeof(line),
-        "%-14lld %-8s %s %s %-6d %-12s %s\n",
-        p->id,
-        p->productId,
-        cat,
-        name,
-        p->quantity,
-        p->date,
-        p->flag ? "卖出" : "进货");
-
+    int n = snprintf(line, sizeof(line),
+             "%-14lld %-8s %s %s %-6d %-12s %s%s%s\n",
+             p->id, p->productId, cat, name, p->quantity, p->date,
+             p->flag ? C_ORANGE : C_RESET,
+             p->flag ? "卖出" : "进货",
+             p->flag ? C_RESET : "");
+    if (outlen + n >= outmax) break;
     strcat(out, line);
-
+    outlen += n;
     p = p->next;
   }
 }
 
 static void drawRecordHint(ui_box_t *b, char *out) {
-  sprintf(out,
-          "---------------------------------------------------------------------------"
-          "-\n"
-          " [滚轮]滚动  [j/k]上下  [q]退出  [F1]浏览  [F2]查询  [F3]统计  [F4]新增");
+  char line[128];
+  fmtCenter(line, C_DIM "[滚轮]滚动  [j/k]上下  [q]退出  [F5]主界面" C_RESET, b->w);
+  sprintf(out, "---------------------------------------------------------------------------"
+          "-\n%s", line);
 }
 
 static void drawQueryHeader(ui_box_t *b, char *out) {
-  /* 第一行：查询输入，第二行：表头，第三行：分隔线 */
   char id[32], pid[32], cat[32], name[32], qty[32], date[32];
   fmtVisual(id,   "ID",   14);
   fmtVisual(pid,  "编号", 8);
@@ -127,11 +153,10 @@ static void drawQueryHeader(ui_box_t *b, char *out) {
   fmtVisual(qty,  "数量", 6);
   fmtVisual(date, "日期", 12);
 
-  int len = sprintf(out, "查询: %s█\n%s %s %s %s %s %s %s\n",
+  int len = sprintf(out, C_CYAN "查询: %s" C_RESET "█\n" C_CYAN "%s %s %s %s %s %s %s\n" C_RESET,
                     g_ui->input, id, pid, cat, name, qty, date, "类型");
 
-  /* 分隔线匹配表头行长度 */
-  int hdrStart = len; /* 第二行起始在 out 中的偏移 */
+  int hdrStart = len;
   while (out[hdrStart] != '\n' && out[hdrStart] != '\0') hdrStart++;
   if (out[hdrStart] == '\n') hdrStart++;
   int hdrLen = strlen(out + hdrStart);
@@ -144,22 +169,27 @@ static void drawQueryHeader(ui_box_t *b, char *out) {
 
 static void drawQueryBody(ui_box_t *b, char *out) {
   if (!state.queryResult[0]) {
-    sprintf(out, "\n  输入编号或名称，按 Enter 查询");
+    char line[128];
+    fmtCenter(line, C_DIM "输入编号或名称，按 Enter 查询" C_RESET, b->w);
+    sprintf(out, "\n%s", line);
     return;
   }
 
-  /* 逐行输出，对选中行包裹反显转义序列 \x1b[7m */
   char tmp[8192];
   strcpy(tmp, state.queryResult);
   char *line = strtok(tmp, "\n");
   int row = 0;
+  int outmax = 60000;
+  int outlen = 0;
   out[0] = '\0';
 
-  while (line) {
+  while (line && outlen < outmax) {
+    int n;
     if (row == state.querySelRow)
-      sprintf(out + strlen(out), "\x1b[7m%s\x1b[0m\n", line);
+      n = sprintf(out + outlen, "\x1b[7m%s\x1b[0m\n", line);
     else
-      sprintf(out + strlen(out), "%s\n", line);
+      n = sprintf(out + outlen, "%s\n", line);
+    outlen += n;
     row++;
     line = strtok(NULL, "\n");
   }
@@ -168,16 +198,14 @@ static void drawQueryBody(ui_box_t *b, char *out) {
 static void drawQueryHint(ui_box_t *b, char *out) {
   const char *confirmLine = "";
   if (state.confirmMode == 1)
-    confirmLine = "确认删除该记录？[y]确认 [n]取消";
+    confirmLine = C_ORANGE ">> 确认删除该记录？[y]确认 [n]取消" C_ORANGE;
 
-
+  char line[128];
+  fmtCenter(line, confirmLine[0] ? confirmLine :
+            C_DIM "[单击]选择  [d]删除  [e]编辑  [Enter]查询  [Esc]清空  [F5]主界面" C_RESET, b->w);
   sprintf(out,
           "---------------------------------------------------------------------------"
-          "-\n"
-          "%s%s",
-          confirmLine,
-          state.confirmMode ? "" :
-          "[单击]选择记录 [d]删除  [e]编辑  [Enter]查询  [Esc]清空");
+          "-\n%s", line);
 }
 
 /* 查询结果行数 */
@@ -227,8 +255,10 @@ static void drawStatHeader(ui_box_t *b, char *out) {
   fmtVisual(out_,   "卖出", 8);
   fmtVisual(remain, "库存", 8);
 
-  int len = sprintf(out, "统计汇总                                    \n%s %s %s %s %s %s\n",
-                    cat, pid, name, in, out_, remain);
+  char title[128];
+  fmtCenter(title, C_CYAN "统计汇总" C_RESET, b->w);
+  int len = sprintf(out, "%s\n%s %s %s %s %s %s\n",
+                    title, cat, pid, name, in, out_, remain);
   memset(out + len, '-', 48);
   out[len + 48] = '\n';
   out[len + 49] = '\0';
@@ -247,10 +277,10 @@ static void drawStatBody(ui_box_t *b, char *out) {
 }
 
 static void drawStatHint(ui_box_t *b, char *out) {
-  sprintf(out,
-          "---------------------------------------------------------------------------"
-          "-\n"
-          " [j/k]滚动  [F1-F4]切换  [q]退出");
+  char line[128];
+  fmtCenter(line, C_DIM "[j/k]滚动  [鼠标滚轮]滚动  [F5]主界面  [q]退出" C_RESET, b->w);
+  sprintf(out, "---------------------------------------------------------------------------"
+          "-\n%s", line);
 }
 
 /* 统计行数（去重商品数）*/
@@ -307,23 +337,25 @@ static void drawAdd(ui_box_t *b, char *out) {
   char buf[1024];
   int pos = 0;
 
-  pos += sprintf(buf + pos, "%s\n\n",
-                 state.editMode ? "编辑记录" : "新增记录");
+  char title[128];
+  fmtCenter(title, state.editMode ? C_CYAN "编辑记录" C_RESET : C_CYAN "新增记录" C_RESET, b->w);
+  pos += sprintf(buf + pos, "%s\n\n", title);
 
   for (int i = 0; i < 5; i++) {
-    pos += sprintf(buf + pos, " %s %s: %s%s\n",
-                   i == state.addField ? ">" : " ",
-                   labels[i],
+    pos += sprintf(buf + pos, " %s %s%s%s: %s%s\n",
+                   i == state.addField ? C_ORANGE ">>" C_RESET : " ",
+                   C_CYAN, labels[i], C_RESET,
                    g_ui->inputMode == SCREEN_ADD && i == state.addField
                        ? g_ui->input
                        : values[i],
                    g_ui->inputMode == SCREEN_ADD && i == state.addField ? "█" : "");
   }
 
-  pos += sprintf(buf + pos, "\n %s 类型: [%s] [%s]\n",
-                 state.addField == 5 ? ">" : " ",
-                 state.addFlag == 0 ? ">进货" : " 进货",
-                 state.addFlag == 1 ? ">卖出" : " 卖出");
+  pos += sprintf(buf + pos, "\n %s %s类型%s: [%s] [%s]\n",
+                 state.addField == 5 ? C_ORANGE ">>" C_RESET : " ",
+                 C_CYAN, C_RESET,
+                 state.addFlag == 0 ? C_ORANGE ">进货" C_RESET : " 进货",
+                 state.addFlag == 1 ? C_ORANGE ">卖出" C_RESET : " 卖出");
 
   if (state.addMsg[0])
     pos += sprintf(buf + pos, "\n %s", state.addMsg);
@@ -332,11 +364,14 @@ static void drawAdd(ui_box_t *b, char *out) {
 }
 
 static void drawAddHint(ui_box_t *b, char *out) {
-  sprintf(out,
-          "---------------------------------------------------------------------------"
-          "-\n"
-          " [Enter]确认  [Tab]下一项  [左/右]切换类型  [Esc]%s",
-          state.editMode ? "取消并返回" : "返回");
+  char line[128], text[128];
+  snprintf(text, sizeof(text),
+           C_DIM "[Enter]确认  [Tab]下一项  [←→]切换类型  [Esc]" C_RESET
+           C_DIM "%s  [F5]主界面" C_RESET,
+           state.editMode ? "取消" : "返回");
+  fmtCenter(line, text, b->w);
+  sprintf(out, "---------------------------------------------------------------------------"
+          "-\n%s", line);
 }
 
 /* ---- 查询处理 ---- */
@@ -766,6 +801,8 @@ void uiInit(ui_t *u) {
   ui_key("\x1b[13~", goStat, u);
   ui_key("\x1bOS", goAdd, u);
   ui_key("\x1b[14~", goAdd, u);
+  ui_key("\x1b[15~", goMain, u);   /* F5 */
+  ui_key("\x1bOE", goMain, u);     /* F5 (备用) */
 
   ui_key("j", scrollDown, u);
   ui_key("k", scrollUp, u);
