@@ -349,6 +349,9 @@ typedef struct ui_t {
   vec_evt_t e;
   ui_box_t *click;
   int mouse, screen, scroll, canscroll, id, force;
+  char input[256];
+  int inputLen;
+  int inputMode; /* 当前处于文本输入模式的 screen，0=无 */
 } ui_t;
 
 /* =========================== */
@@ -386,6 +389,10 @@ static void ui_new(int s, ui_t *u) {
   u->id = 0;
 
   u->force = 0;
+
+  u->inputLen = 0;
+  u->inputMode = 0;
+  memset(u->input, 0, sizeof(u->input));
 }
 
 /*
@@ -600,9 +607,29 @@ static void _ui_update(char *c, int n, ui_t *u) {
     }
   }
 
+  int matched = 0;
   vec_foreach(&(u->e), evt, ind) {
-    if (strncmp(c, evt->c, strlen(evt->c)) == 0)
+    int elen = strlen(evt->c);
+    if (elen == n && strncmp(c, evt->c, elen) == 0) {
       evt->f();
+      matched = 1;
+    }
+  }
+
+  /* 文本输入：无已注册按键匹配 且 当前屏幕处于输入模式 且 单字节输入 */
+  if (!matched && u->inputMode == u->screen && n == 1) {
+    unsigned char ch = c[0];
+    if (ch >= 0x20 && ch <= 0x7E) {
+      if (u->inputLen < 255) {
+        u->input[u->inputLen++] = ch;
+        u->input[u->inputLen] = '\0';
+        ui_draw(u);
+      }
+    } else if (ch == 0x7F) {
+      if (u->inputLen > 0)
+        u->input[--u->inputLen] = '\0';
+      ui_draw(u);
+    }
   }
 }
 
