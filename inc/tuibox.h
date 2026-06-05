@@ -410,6 +410,7 @@ static void ui_free(ui_t *u) {
   char *term;
 
   printf("\x1b[0m\x1b[2J\x1b[?1049l\x1b[?1003l\x1b[?1015l\x1b[?1006l\x1b[?25h");
+  fflush(stdout);
   tcsetattr(STDIN_FILENO, TCSAFLUSH, &(u->tio));
 
   vec_foreach(&(u->b), val, i) {
@@ -510,9 +511,9 @@ static void ui_draw_one(ui_box_t *tmp, int flush, ui_t *u) {
   if (tmp->screen != u->screen)
     return;
 
-  /* 确保缓冲区至少 8KB，防止内容动态增长时溢出 */
+  /* 缓冲区下限为 MAXCACHESIZE，防止内容动态增长（如查询结果+转义序列）溢出 */
   int bufsz = strlen(tmp->cache) * 2;
-  if (bufsz < 8192) bufsz = 8192;
+  if (bufsz < MAXCACHESIZE) bufsz = MAXCACHESIZE;
   buf = calloc(1, bufsz);
 
   if (u->force || tmp->watch == NULL || *(tmp->watch) != tmp->last) {
@@ -522,12 +523,13 @@ static void ui_draw_one(ui_box_t *tmp, int flush, ui_t *u) {
 
     /* 如果新内容比缓存大，重新分配缓存 */
     int newlen = strlen(buf);
-    if (newlen + 1 > bufsz / 2) {
-      tmp->cache = realloc(tmp->cache, newlen * 2 + 1);
+    if (newlen + 1 > strlen(tmp->cache)) {
+      char *newcache = realloc(tmp->cache, newlen * 2 + 1);
+      if (newcache) tmp->cache = newcache;
     }
     strcpy(tmp->cache, buf);
   } else {
-    /* buf is allocated proportionally to tmp->cache, so strcpy is safe */
+    /* 缓冲区足够大，strcpy 安全 */
     strcpy(buf, tmp->cache);
   }
   tok = strtok(buf, "\n");
