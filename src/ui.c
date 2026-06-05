@@ -8,20 +8,68 @@
 
 static UIState state;
 
+/* 计算 UTF-8 字符串的显示宽度（ASCII=1, 中文/全角=2）*/
+static int strVisualWidth(const char *s) {
+  int w = 0;
+  while (*s) {
+    unsigned char c = *s;
+    if (c < 0x80)      { w++;  s++; }           // ASCII
+    else if (c < 0xE0) { w++;  s += 2; }         // 2-byte (Latin 拡張, 按1列)
+    else if (c < 0xF0) { w += 2; s += 3; }       // 3-byte (CJK, 2列)
+    else               { w += 2; s += 4; }       // 4-byte (emoji, 2列)
+  }
+  return w;
+}
+
+/* 将 src 以显示宽度 visualWidth 写入 dst（截断或补空格，确保列对齐）*/
+static void fmtVisual(char *dst, const char *src, int visualWidth) {
+  int w = 0;
+  const char *s = src;
+  char *d = dst;
+
+  while (*s && w < visualWidth) {
+    unsigned char c = *s;
+    int cw, cb;
+    if (c < 0x80)      { cw = 1; cb = 1; }
+    else if (c < 0xE0) { cw = 1; cb = 2; }
+    else if (c < 0xF0) { cw = 2; cb = 3; }
+    else               { cw = 2; cb = 4; }
+
+    if (w + cw > visualWidth) break;
+
+    for (int i = 0; i < cb && *s; i++) *d++ = *s++;
+    w += cw;
+  }
+  while (w < visualWidth) { *d++ = ' '; w++; }
+  *d = '\0';
+}
+
 static void drawMain(ui_box_t *b, char *out) {
   sprintf(out, "超市管理系统\n\n"
                "[1] 浏览记录\n"
                "[2] 查询商品\n"
                "[3] 分类统计\n"
                "[4] 新增记录\n\n"
-               "[ESC] 退出\n");
+               "[Q] 退出\n");
 }
 
 static void drawRecordHeader(ui_box_t *b, char *out) {
-  sprintf(
-      out,
-      "ID             编号     类别     名称       数量   日期         类型\n"
-      "-----------------------------------------------------------------");
+  char id[32], pid[32], cat[32], name[32], qty[32], date[32];
+
+  fmtVisual(id,   "ID",   14);
+  fmtVisual(pid,  "编号", 8);
+  fmtVisual(cat,  "类别", 8);
+  fmtVisual(name, "名称", 10);
+  fmtVisual(qty,  "数量", 6);
+  fmtVisual(date, "日期", 12);
+
+  int len = sprintf(out, "%s %s %s %s %s %s %s\n",
+                    id, pid, cat, name, qty, date, "类型");
+
+  /* 分隔线与标题行等长 */
+  memset(out + len, '-', len - 1);
+  out[len + len - 1] = '\n';
+  out[len + len] = '\0';
 }
 
 static void drawRecord(ui_box_t *b, char *out) {
@@ -31,15 +79,19 @@ static void drawRecord(ui_box_t *b, char *out) {
 
   while (p) {
     char line[256];
+    char cat[32], name[32];
+
+    fmtVisual(cat, p->category, 8);
+    fmtVisual(name, p->name, 10);
 
     snprintf(
         line,
         sizeof(line),
-        "%-14lld %-8s %-8s %-10s %-6d %-12s %s\n",
+        "%-14lld %-8s %s %s %-6d %-12s %s\n",
         p->id,
         p->productId,
-        p->category,
-        p->name,
+        cat,
+        name,
         p->quantity,
         p->date,
         p->flag ? "卖出" : "进货");
@@ -48,6 +100,13 @@ static void drawRecord(ui_box_t *b, char *out) {
 
     p = p->next;
   }
+}
+
+static void drawRecordHint(ui_box_t *b, char *out) {
+  sprintf(out,
+          "---------------------------------------------------------------------------"
+          "-\n"
+          " [滚轮]滚动  [j/k]上下  [q]退出  [1]浏览  [2]查询  [3]统计  [4]新增");
 }
 
 static void drawQuery(ui_box_t *b, char *out) {
@@ -107,10 +166,10 @@ static void drawScrollBar(ui_box_t *b, char *out) {
     visible = 1;
 
   if (total <= visible) {
-    /* 数据不足一页，不显示滚动条滑块 */
+    /* 数据不足一页，显示空轨道（无滑块）*/
     char *p = out;
     for (int i = 0; i < height; i++) {
-      p += sprintf(p, " \n");
+      p += sprintf(p, "│\n");
     }
     return;
   }
@@ -204,6 +263,10 @@ void uiInit(ui_t *u) {
   /* 滚动条 */
   ui_add(78, 3, 2, 35, SCREEN_RECORD, NULL, 0, drawScrollBar, NULL, NULL, NULL,
          NULL, 0, u);
+
+  /* 固定操作提示（底部两行：分隔线 + 快捷键，不随滚动）*/
+  ui_add(1, u->ws.ws_row - 2, 76, 2, SCREEN_RECORD, NULL, 0, drawRecordHint,
+         NULL, NULL, NULL, NULL, 0, u);
 
   ui_add(1, 1, 80, 40, SCREEN_QUERY, NULL, 0, drawQuery, NULL, NULL, NULL, NULL,
          0, u);
