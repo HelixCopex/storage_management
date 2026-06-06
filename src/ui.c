@@ -87,7 +87,7 @@ static void drawMain(ui_box_t *b, char *out) {
   pos += sprintf(out + pos, "     %s[F5]%s 提示\n\n", C_ORANGE, C_RESET);
   pos += sprintf(out + pos, "     %s[Q]%s  退出\n\n", C_ORANGE, C_RESET);
 
-  fmtCenter(line, C_DIM "v1.0.0 @ HelixCopex 黄皓昱" C_RESET, b->w);
+  fmtCenter(line, C_DIM "v1.0.0 @ HelixCopex" C_RESET, b->w);
   pos += sprintf(out + pos, "%s", line);
 }
 
