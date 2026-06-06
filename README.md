@@ -89,7 +89,9 @@ graph TD
     query.h --> data.h
     stat.h --> data.h
     data.h --> stdlib
-    tuibox.h --> stdlib, termios, sys/ioctl
+    tuibox.h --> stdlib
+    tuibox.h --> termios
+    tuibox.h --> sys.ioctl
 ```
 
 ---
